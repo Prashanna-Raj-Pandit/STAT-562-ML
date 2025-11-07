@@ -1,0 +1,232 @@
+---
+title: "STAT-562 Homework 1"
+author: "Prashanna Raj Pandit"
+output:
+  word_document: default
+---
+
+### (a) Load the dataset
+
+```{r}
+# Load dataset
+data("mtcars")
+df <- mtcars
+
+# Number of rows and columns
+n_row <- nrow(df)
+n_col <- ncol(df)
+
+response_var <- c("am")   # Transmission type (0 = Automatic, 1 = Manual)
+qualitative_vars <- c("vs")  # Engine type (0 = V-shaped, 1 = Straight)
+quantitative_vars <- setdiff(names(df), c(response_var, qualitative_vars))
+n_quant <- length(quantitative_vars)
+n_qual  <- length(qualitative_vars)
+prop<-round(prop.table(table(df$am))*100,digits=1)
+
+cat("Number of rows:", n_row, "\n")
+cat("Number of columns:", n_col, "\n")
+cat("Quantitative variables:", n_quant, "\n")
+cat("Qualitative variables:", n_qual, "\n")
+cat("Proportion of each category of the response:", prop)
+
+```
+
+### (b) Importance of standardizing quantitative predictors:
+
+**Answer:** k-NN is a distance-based algorithm, so it’s sensitive to the scale of features.
+If one variable has a much larger numeric range than others, it will dominate the distance calculation and bias the results.
+Standardizing puts all quantitative predictors on a common scale, ensuring each feature contributes equally to the distance and the model’s decisions.
+
+### (c) Data Preparation:
+
+#### (i) Converting the qualitative predictors to factors
+
+**Answer:** The purpose of converting numeric columns to factors is to help R and machine learning models correctly interpret categorical information.
+Without this step, algorithms may treat the values 0 and 1 as numerical quantities, implying an order or magnitude difference that doesn’t exist.
+By defining them as factors, R knows these values represent categories or labels, not numerical scales.
+
+```{r}
+# Convert the qualitative predictor to a factor variable in df
+df$vs <- factor(df$vs, levels = c(0, 1), labels = c("V-shaped", "Straight"))
+
+# Convert factor variable into dummy variables (one-hot encoding)
+vs_encoded <- model.matrix(~ vs, data = df)[, -1]
+
+# Convert response to factor with readable labels
+df$am <- factor(df$am, levels = c(0, 1), labels = c("Automatic", "Manual"))
+
+```
+
+#### (ii)  Standardize the data
+
+**Answer:** Before standardization, the variable hp (horsepower) had values ranging from 52 to 335, with a mean of 146.7 and a median of 123. This shows that horsepower values vary widely across cars and exist on a much larger numerical scale compared to other variables.
+
+After applying standardization using the scale() function, the same variable was transformed to have a mean of approximately 0 and a standard deviation of 1. The new standardized values range from about –1.38 to 2.75, representing how far each car’s horsepower is from the average in standard deviation units.
+
+This makes all quantitative predictors comparable in magnitude, ensuring that features like horsepower do not dominate the k-NN distance calculations simply because they were measured on a larger numeric scale. 
+
+```{r}
+scaled_quant <- scale(df[, quantitative_vars])
+# Display summary of 'hp' before and after standardization
+summary(df$hp)
+summary(scaled_quant[,"hp"])
+data_ready<-cbind(as.data.frame(scaled_quant),vs_encoded)
+
+```
+
+### (d) Train/Test split: (70/30)
+
+#### (i)
+
+**Answer:**In the training set, the response variable (am) consists of 59.1% Automatic and 40.9% Manual cars.
+In the test set, the proportions are 60% Automatic and 40% Manual.
+
+```{r}
+library(rsample)
+set.seed(123)
+
+# Combine predictors and response temporarily for splitting
+split_data <- cbind(data_ready, am = df$am)
+
+# Perform 70/30 stratified split by 'am'
+split_obj <- initial_split(split_data, prop = 0.70, strata = am)
+
+# Extract training and test datasets
+train_data <- training(split_obj)
+test_data  <- testing(split_obj)
+
+# Check proportions in train/test
+prop.table(table(train_data$am))
+prop.table(table(test_data$am))
+
+train_labels<-train_data$am
+test_labels<-test_data$am
+# Remove the label column from the feature matrices
+train_data <- subset(train_data, select = -am)
+test_data  <- subset(test_data, select = -am)
+```
+
+#### (ii)  Importance of tratified sampling:
+
+**Answer:** Maintaining the same distribution of the response variable in both the training and testing sets is important because it ensures that the model learns and is evaluated on data that truly represent the overall population.
+
+If one class (for example, “Automatic”) is overrepresented in the training data but underrepresented in the test data, the model may become biased learning patterns that favor the majority class and performing poorly on the minority class.
+
+By using stratified sampling, we make sure both sets reflect the real-world balance between Automatic and Manual cars. This leads to a more reliable, fair, and accurate evaluation of the model’s performance.
+
+### (e) k-NN with k = √n
+
+```{r}
+library(class)
+k=sqrt(nrow(train_data))
+k
+test_pred<-knn(train = train_data,test = test_data,cl=train_labels,k=5)
+```
+
+### (f) onfusion matrix and calculate accuracy
+
+```{r}
+table(test_labels,test_pred)
+accuracy<-mean(test_labels==test_pred)
+accuracy
+```
+
+### (g) Perform hyperparameter tuning
+
+```{r}
+
+library(caret)
+set.seed(123)
+ctrl<-trainControl(method = "cv",number=10)
+knn_grid<-expand.grid(k=1:20)
+train_knn<-cbind(train_data,am=train_labels)
+
+# train kNN using cross validation
+knn_cv<-train(am~.,data=train_knn,
+              method="knn",
+              trControl=ctrl,
+              tuneGrid=knn_grid)
+best_k<-knn_cv$bestTune$k
+plot(knn_cv, main = "k-NN Accuracy vs. Number of Neighbors (k)")
+
+best_k
+```
+
+
+#### (i)
+**Answer:**Based on the accuracy vs. k plot, the optimal value of k for this dataset is 5, where the model achieves the highest cross-validated accuracy. So, it is selected as the best number of neighbors for building the final k-NN model.
+
+### (h) final k-NN model with cross validation
+
+```{r}
+
+
+train_control<-trainControl(method = "cv", number = 10, classProbs = TRUE, savePredictions = "final")
+# Fit final k-NN model with cross validation
+final_model_cv<-train(am~.,data=train_knn,method="knn",tuneGrid=data.frame(k=best_k), trControl=train_control)
+#print(final_model_cv)
+
+# predict on test dataset
+final_prediction<-predict(final_model_cv,newdata = test_data)
+final_prediction
+```
+
+#### (i) Performance
+
+```{r}
+
+final_accuracy<-mean(final_prediction==test_labels)
+final_accuracy
+
+conf_matrix <- confusionMatrix(final_prediction, test_labels)
+conf_matrix
+
+# Extract performance metrics
+overall_accuracy  <- conf_matrix$overall["Accuracy"]
+misclassification <- 1 - overall_accuracy
+sensitivity       <- conf_matrix$byClass["Sensitivity"]   # True Positive Rate (Recall)
+specificity       <- conf_matrix$byClass["Specificity"]   # True Negative Rate
+precision         <- conf_matrix$byClass["Precision"]
+recall            <- conf_matrix$byClass["Recall"]
+f1_score          <- conf_matrix$byClass["F1"]
+
+cat("Overall Accuracy:", round(overall_accuracy, 4), "\n")
+cat("Misclassification Rate:", round(misclassification, 4), "\n")
+cat("Sensitivity:", round(sensitivity, 4), "\n")
+cat("Specificity:", round(specificity, 4), "\n")
+cat("Precision:", round(precision, 4), "\n")
+cat("Recall:", round(recall, 4), "\n")
+cat("F1 Score:", round(f1_score, 4), "\n")
+
+
+# --- ROC Curve and AUC evaluation ---
+library(pROC)
+
+# Get predicted probabilities for the positive class ("Manual")
+prob_predictions <- predict(final_model_cv, newdata = test_data, type = "prob")
+
+# Build ROC curve
+roc_curve <- roc(
+  response = test_labels,
+  predictor = prob_predictions$Manual,
+  levels = levels(test_labels)
+)
+
+# Plot ROC curve
+plot(roc_curve, col = "blue", main = "ROC Curve for Final k-NN Model")
+auc_value <- auc(roc_curve)
+auc_value
+
+```
+
+#### (ii)
+
+**Sensitivity:**The sensitivity of 0.67 means that the model correctly identified about 67% of the cars that actually have automatic transmission. In simple terms, out of all the automatic cars, the model missed roughly one-third — it occasionally misclassified them as manual.
+
+**Specificity:**The specificity of 1.00 means the model correctly recognized all manual cars — none of them were wrongly labeled as automatic. So, when the model says a car is manual, it’s always right.
+
+**Precision:**The precision of 1.00 indicates that every car predicted as automatic was truly automatic.
+In other words, the model never made a false claim that a manual car was automatic — it’s very cautious when predicting automatics.
+
+**Recall:**The recall of 0.67 indicates that the model successfully identified about two-thirds of all actual automatic cars. This means it was able to detect most of the automatic vehicles, but it still missed a few, labeling them as manual instead. In essence, recall measures how completely the model captures the “automatic” class — a higher recall would mean fewer missed detections.
+In this case, the model demonstrates good but not perfect coverage, prioritizing precision (being certain) over recall (catching every automatic).
