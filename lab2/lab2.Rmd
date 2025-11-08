@@ -1,0 +1,129 @@
+---
+title: "STAT 562- Homework 2"
+author: "Prashanna Raj Pandit"
+output: word_document
+date: "2025-11-07"
+---
+
+
+### 1.Data preprocessing
+
+```{r}
+library(ISLR2)
+data(Auto)
+#str(Auto)
+sum(is.na(Auto))
+Auto$mpg01<-ifelse(Auto$mpg > median(Auto$mpg),1,0)
+Auto$mpg01<-as.factor(Auto$mpg01)
+Auto$origin<-as.factor(Auto$origin)
+Auto<-subset(Auto,select= -c(mpg,name))
+prop.table(table(Auto$mpg01))
+```
+
+### 2.Train/test split
+
+**Answer:** After performing the stratified 75-25 split, both the training and test sets ended up with the same distribution of the response variable 50% of the cars have low mileage (mpg01 = 0) and 50% have high mileage (mpg01 = 1).
+
+This shows that the split worked perfectly: each subset represents the overall data well, with no imbalance between the two classes. Because of this, the models we build later won’t be biased toward either high- or low-mileage cars, leading to fairer and more reliable results.
+
+```{r}
+library(rsample)
+set.seed(123)
+split<-initial_split(Auto,prop = 0.75,strata = mpg01)
+train_data<-training(split)
+test_data<-testing(split)
+
+prop.table(table(train_data$mpg01))
+prop.table(table(test_data$mpg01))
+```
+
+### 3. Perform LDA, QDA, Naive Bayes with 10-fold cross validation.
+
+```{r}
+library(caret)
+library(MASS)
+library(e1071)
+set.seed(123)
+train_control<-trainControl(method = "cv", number=10)
+model_lda<-caret::train(mpg01~., data=train_data, method='lda',trControl=train_control,metric="Accuracy")
+model_qda<-caret::train(mpg01~., data=train_data, method="qda",trControl=train_control,metric="Accuracy")
+model_nb<-caret::train(mpg01~., data=train_data,method='naive_bayes',trControl=train_control,metric="Accuracy")
+```
+
+
+### 4. Predictions & confusion matrices
+
+**Answer:**
+All three models (LDA, QDA, and Naive Bayes) performed almost identically on the test set, each achieving about 91.8% accuracy. They all showed perfect **precision** (1.00), meaning every car predicted as high mileage truly was high mileage. The **recall** of roughly 0.84 shows that the models correctly identified most, but not all, of the high-mileage cars. Their **F1-scores** (around 0.91) indicate a very good balance between precision and recall.
+
+From the **ROC** curves, all three lines are close to the top-left corner, showing that the models can clearly separate high and low-mileage cars.
+Their AUC values confirm this: QDA (0.958) was just slightly higher than LDA (0.955), while Naive Bayes (0.934) was only a bit behind.
+
+Even though QDA had the highest AUC, the difference between the three models is tiny.
+Because LDA is simpler and gives almost the same performance, it would likely be the best choice overall — it’s easier to interpret and less likely to overfit.
+
+```{r}
+# ---- Make predictions on the test data ----
+pred_lda <- predict(model_lda, newdata = test_data)
+pred_qda <- predict(model_qda, newdata = test_data)
+pred_nb  <- predict(model_nb,  newdata = test_data)
+
+# ---- Confusion matrices ----
+lda_cm <- caret::confusionMatrix(pred_lda, test_data$mpg01)
+qda_cm <- caret::confusionMatrix(pred_qda, test_data$mpg01)
+nb_cm  <- caret::confusionMatrix(pred_nb,  test_data$mpg01)
+
+lda_cm$table
+qda_cm$table
+nb_cm$table
+# --- LDA ---
+lda_acc  <- lda_cm$overall["Accuracy"]
+lda_prec <- lda_cm$byClass["Precision"]
+lda_rec  <- lda_cm$byClass["Recall"]
+lda_f1   <- lda_cm$byClass["F1"]
+
+# --- QDA ---
+qda_acc  <- qda_cm$overall["Accuracy"]
+qda_prec <- qda_cm$byClass["Precision"]
+qda_rec  <- qda_cm$byClass["Recall"]
+qda_f1   <- qda_cm$byClass["F1"]
+
+# --- Naive Bayes ---
+nb_acc  <- nb_cm$overall["Accuracy"]
+nb_prec <- nb_cm$byClass["Precision"]
+nb_rec  <- nb_cm$byClass["Recall"]
+nb_f1   <- nb_cm$byClass["F1"]
+
+library(pROC)
+
+lda_prob<-predict(model_lda,newdata = test_data,type="prob")[,2]
+qda_prob<-predict(model_qda,newdata = test_data,type="prob")[,2]
+nb_prob<-predict(model_nb,newdata = test_data,type="prob")[,2]
+
+roc_lda <- roc(test_data$mpg01, lda_prob)
+roc_qda <- roc(test_data$mpg01, qda_prob)
+roc_nb  <- roc(test_data$mpg01, nb_prob)
+
+auc_lda <- pROC::auc(roc_lda)
+auc_qda <- pROC::auc(roc_qda)
+auc_nb  <- pROC::auc(roc_nb)
+
+metrics <- data.frame(
+  Model     = c("LDA", "QDA", "Naive Bayes"),
+  Accuracy  = c(lda_acc, qda_acc, nb_acc),
+  Precision = c(lda_prec, qda_prec, nb_prec),
+  Recall    = c(lda_rec, qda_rec, nb_rec),
+  F1_Score  = c(lda_f1, qda_f1, nb_f1),
+  AUC       = c(auc_lda, auc_qda, auc_nb)
+)
+
+metrics
+
+library(ggplot2)
+plot(roc_lda, col = "blue", main = "ROC Curves for LDA, QDA, and Naive Bayes")
+plot(roc_qda, col = "red", add = TRUE)
+plot(roc_nb,  col = "green", add = TRUE)
+legend("bottomright", legend=c("LDA", "QDA", "Naive Bayes"),
+       col=c("blue", "red", "green"), lwd=2)
+
+```
